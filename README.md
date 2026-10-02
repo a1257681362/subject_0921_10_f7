@@ -18,6 +18,9 @@
 覆盖四步：**报名 → 编排 → 发证 → 查档**。所有接口在 Shiro 保护下，使用 HTTP Basic 认证：
 `curl -u bootstrap:bootstrap ...`；经办人通过请求头 `X-Operator` 记录（缺省 `system`）。
 
+> cert-1 起新增**用人单位专用账号** `employer/employer`，只能访问对外验真窗口 `/api/cert-verify`；
+> 用它访问其余 `/api/**` 返回 403。内部管理仍用 `bootstrap/bootstrap`（角色 `system`）。
+
 约定：
 - 所有响应统一为 `{success, code, message, data}`；失败返回可读状态码与中文原因（含 401/404），不返回空白。
 - **批量动作分两步**：先调 `*/preview` 看影响范围（可处理/跳过逐条列出），确认后再调执行接口。
@@ -276,3 +279,50 @@
 - 通知：`GET /api/notifications?regNo=` 可查裁定结论通知（与成绩复核通知同一处）。
 
 > 新表 `t_examinee_checkin / t_violation_record / t_absence_mark / t_absence_mark_version / t_score_snapshot / t_absence_stat` 已纳入工作区快照与回退；`t_exam_score` 加列 `valid`（裁定生效回写，成绩导入时若已有生效无效裁定则落库即无效）；schema 版本号 `absence-1`。
+
+## 证书编号与验真工作区（cert-1）
+
+解决"编号手工排出重号、发出的证收不回、验真没有的事"：**编号规则收口（年度+批次+流水、末位校验码）→ 系统发号唯一 → 发证只读、作废留记录 → 对外凭编号+姓名验真回有效性与批次**。编号规则与等级规则、混编算法同一套**模块 / 版本 / 状态**三段式，规则调整只管新证。用人单位下周开始接入，先小流量。
+
+视图口径：内部管理走 `bootstrap/bootstrap`；对外验真窗口走专用账号 `employer/employer`（只能访问 `/api/cert-verify`）。
+
+### 34. 编号规则模块（模块 + 版本 + 状态）
+
+- `POST /api/cert-rules`、`GET /api/cert-rules?projectCode=`、`GET /api/cert-rules/{id}`：规则按项目建档（缺省 `DEFAULT`，助考传 `ZHUKAO`）。
+- `POST /api/cert-rules/{ruleId}/versions`：建草稿版本，提交发号参数
+  `{"prefix":"ZS","yearDigits":4,"batchDigits":2,"seqDigits":5,"checkEnabled":true}`
+  （前缀 1~6 位大写字母/数字；年度 2/4 位；批次 1~4 位；流水 3~8 位，非法拒收）。
+  编号形态 = `前缀 + 年度 + 批次 + 流水 + 末位校验码`，如 `ZS20260100001X`。
+- 末位校验码采用 **ISO 7064 MOD 11-2**（数字字母扩展取值，余数 10 记为 `X`），可机读挡住抄错一位与邻位颠倒。
+- `GET .../versions`、`GET /api/cert-rules/versions/{versionId}`。
+- `POST /api/cert-rules/versions/{versionId}/publish`：**DRAFT→ACTIVE**，发布即冻结发号参数，同规则旧生效版自动 **DISABLED**（同规则同时刻仅一版生效）；`POST .../disable` 人工停用。
+- **规则调整只管新证**：每张证永久记下 `rule_version_no` 与冻结参数；规则升级、流水加宽后老证编号不变。
+
+### 35. 发证（系统发号，两步预检；流水重起不撞旧号）
+
+- `POST /api/certificates/issue/preview` → `POST /api/certificates/issue`：
+  请求 `{projectCode?, batchId?, certYear?(缺省今年), certBatch?(可由批次编码数字部分推导), items:[{holderName,idNo?,subject?,grade?}]}`。
+  - 发号按 `规则+年度+批次` 维度发流水，`t_cert_seq` **行锁取号**，并发不重号；并以**库内已用最大流水兜底起跳**（`MAX(current_seq, 已用最大流水)`），序列重起 / 手工旧号补登后都不撞旧号。
+  - 预检逐条列可发 / 跳过（同年度批次同人跳过、清单内重复跳过）与**拟发编号**；执行实发编号逐条带回。
+  - 流水段用尽报 `CERT_SEQ_EXHAUSTED`（不落半条），提示发布更宽流水的新规则版本。
+- **手工旧号补登** `POST /api/certificates/legacy`：旧证（收不回的）原样登记 `cert_no`（不重发）；能辨认年度/批次/流水时自动把该序列抬过旧号，之后发号跳过旧号段。
+- **发证后只读**：证书无修改 / 删除接口；持证人信息、编号、规则版本永久冻结。
+
+### 36. 作废（留记录，不删除）
+
+- `POST /api/certificates/{id}/revoke`、`POST /api/certificates/by-no/{certNo}/revoke`：`{reason}`（必填）。
+  ISSUED→REVOKED，只切状态并**追加一条** `t_certificate_revoke_record`（原因、经办、钟点），原证保留、信息仍只读；重复作废报 `CERT_ALREADY_REVOKED`。
+- `GET /api/certificates/{id}/revoke-records`：查作废留痕。
+- 查询：`GET /api/certificates?batchId=&projectCode=&status=&holderName=`、`GET /api/certificates/{id}`、`GET /api/certificates/by-no/{certNo}`（内部视图，含留档字段）。
+
+### 37. 对外验真窗口（凭编号+姓名，回有效性与批次，不带隐私）
+
+- `GET /api/cert-verify?certNo=&name=`（专用账号 `employer/employer`）：
+  - 只回**证面公开项**：`found / valid / status(ISSUED|REVOKED|NOT_FOUND) / message / certNo / holderName / batchCode / batchName / subject / grade / projectCode / issuedAt`，**不含证件号等隐私字段**（响应 DTO 无此类字段）。
+  - 编号不存在、编号抄错、**姓名不匹配统一 `found=false`**，不暴露编号是否存在，防枚举探测。
+  - **作废证给明确提示**：`valid=false,status=REVOKED`，message「该证书已作废，不再有效（作废原因：…）」，与"查无此证"清楚区分。
+- **小流量灰度**：`GET /api/cert-verify-config`、`PUT /api/cert-verify-config/{key}?value=`（内部账号）。
+  - `VERIFY_ENABLED`（true/false）窗口总开关，关闭返回 `CERT_VERIFY_DISABLED`；
+  - `VERIFY_RATE_PER_MINUTE` 每分钟上限（缺省 60，0 不限），超限返回 `CERT_VERIFY_RATE_LIMITED`。下周接入先小流量，观察后再调大。
+
+> 新表 `t_cert_number_rule / t_cert_number_rule_version / t_cert_seq / t_certificate / t_certificate_revoke_record / t_cert_verify_config` 已纳入工作区快照与回退；schema 版本号 `cert-1`。
