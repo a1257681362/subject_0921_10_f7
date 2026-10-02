@@ -9,3 +9,9 @@ mybatis-plus:
   global-config:
     db-config:
       id-type: auto
+
+# 证书验真窗口小流量限流（次/分钟/IP）；0 或负数表示不限流
+evops:
+  cert:
+    verify:
+      rate-limit-per-minute: 30

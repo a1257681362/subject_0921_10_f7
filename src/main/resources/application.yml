@@ -34,3 +34,10 @@ mybatis-plus:
 logging:
   level:
     com.evops: INFO
+
+# 证书验真对外窗口：用人单位先小流量接入。按来源 IP 滑动窗口限流，默认每分钟 30 次；
+# 放量时调大；设为 0 或负数表示不限流（仅建议内网压测临时使用）。
+evops:
+  cert:
+    verify:
+      rate-limit-per-minute: 30

@@ -6,6 +6,12 @@ import com.evops.absence.entity.AbsenceStat;
 import com.evops.absence.entity.ExamineeCheckin;
 import com.evops.absence.entity.ScoreSnapshot;
 import com.evops.absence.entity.ViolationRecord;
+import com.evops.certificate.entity.CertNumberRule;
+import com.evops.certificate.entity.CertNumberRuleVersion;
+import com.evops.certificate.entity.Certificate;
+import com.evops.certificate.entity.CertificateRevoke;
+import com.evops.certificate.entity.CertificateSeq;
+import com.evops.certificate.entity.LegacyCertNo;
 import com.evops.exam.entity.AdmissionTicket;
 import com.evops.exam.entity.ExamBatch;
 import com.evops.exam.entity.ExamRoom;
@@ -714,4 +720,102 @@ public interface RestoreMapper {
 
     @Update("ALTER TABLE t_absence_stat ALTER COLUMN id RESTART WITH ${value}")
     void restartAbsenceStat(@Param("value") long value);
+
+    // ============ cert-1：证书编号与验真 ============
+    @Delete("DELETE FROM t_legacy_cert_no")
+    void clearLegacyCertNos();
+
+    @Delete("DELETE FROM t_certificate_seq")
+    void clearCertificateSeqs();
+
+    @Delete("DELETE FROM t_certificate_revoke")
+    void clearCertificateRevokes();
+
+    @Delete("DELETE FROM t_certificate")
+    void clearCertificates();
+
+    @Delete("DELETE FROM t_cert_number_rule_version")
+    void clearCertRuleVersions();
+
+    @Delete("DELETE FROM t_cert_number_rule")
+    void clearCertRules();
+
+    @Insert("INSERT INTO t_cert_number_rule (id, code, name, project_code, remark, "
+            + "create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{code},#{name},#{projectCode},#{remark},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertCertRule(CertNumberRule r);
+
+    @Insert("INSERT INTO t_cert_number_rule_version (id, rule_id, version_no, status, params, remark, "
+            + "published_by, published_at, disabled_by, disabled_at, operator, "
+            + "create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{ruleId},#{versionNo},#{status},#{params},#{remark},"
+            + "#{publishedBy},#{publishedAt},#{disabledBy},#{disabledAt},#{operator},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertCertRuleVersion(CertNumberRuleVersion v);
+
+    @Insert("INSERT INTO t_certificate (id, cert_no, batch_id, registration_id, project_code, name, reg_no, "
+            + "subject, cert_year, batch_code, seq_value, rule_id, rule_version_id, rule_version_no, "
+            + "checksum_valid, status, issued_by, issued_at, revoked_at, revoke_reason, remark, "
+            + "create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{certNo},#{batchId},#{registrationId},#{projectCode},#{name},#{regNo},"
+            + "#{subject},#{certYear},#{batchCode},#{seqValue},#{ruleId},#{ruleVersionId},#{ruleVersionNo},"
+            + "#{checksumValid},#{status},#{issuedBy},#{issuedAt},#{revokedAt},#{revokeReason},#{remark},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertCertificate(Certificate c);
+
+    @Insert("INSERT INTO t_certificate_revoke (id, certificate_id, cert_no, name, batch_id, reason, operator, "
+            + "revoked_at, create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{certificateId},#{certNo},#{name},#{batchId},#{reason},#{operator},#{revokedAt},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertCertificateRevoke(CertificateRevoke r);
+
+    @Insert("INSERT INTO t_certificate_seq (id, rule_version_id, cert_year, batch_code, last_seq, start_seq, "
+            + "create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{ruleVersionId},#{certYear},#{batchCode},#{lastSeq},#{startSeq},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertCertificateSeq(CertificateSeq s);
+
+    @Insert("INSERT INTO t_legacy_cert_no (id, cert_no, name, batch_code, cert_year, project_code, source, "
+            + "status, operator, remark, create_by, create_time, update_by, update_time) VALUES "
+            + "(#{id},#{certNo},#{name},#{batchCode},#{certYear},#{projectCode},#{source},"
+            + "#{status},#{operator},#{remark},"
+            + "#{createBy},#{createTime},#{updateBy},#{updateTime})")
+    void insertLegacyCertNo(LegacyCertNo l);
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_cert_number_rule")
+    long maxCertRuleId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_cert_number_rule_version")
+    long maxCertRuleVersionId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_certificate")
+    long maxCertificateId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_certificate_revoke")
+    long maxCertificateRevokeId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_certificate_seq")
+    long maxCertificateSeqId();
+
+    @Select("SELECT COALESCE(MAX(id),0) FROM t_legacy_cert_no")
+    long maxLegacyCertNoId();
+
+    @Update("ALTER TABLE t_cert_number_rule ALTER COLUMN id RESTART WITH ${value}")
+    void restartCertRule(@Param("value") long value);
+
+    @Update("ALTER TABLE t_cert_number_rule_version ALTER COLUMN id RESTART WITH ${value}")
+    void restartCertRuleVersion(@Param("value") long value);
+
+    @Update("ALTER TABLE t_certificate ALTER COLUMN id RESTART WITH ${value}")
+    void restartCertificate(@Param("value") long value);
+
+    @Update("ALTER TABLE t_certificate_revoke ALTER COLUMN id RESTART WITH ${value}")
+    void restartCertificateRevoke(@Param("value") long value);
+
+    @Update("ALTER TABLE t_certificate_seq ALTER COLUMN id RESTART WITH ${value}")
+    void restartCertificateSeq(@Param("value") long value);
+
+    @Update("ALTER TABLE t_legacy_cert_no ALTER COLUMN id RESTART WITH ${value}")
+    void restartLegacyCertNo(@Param("value") long value);
 }

@@ -276,3 +276,52 @@
 - 通知：`GET /api/notifications?regNo=` 可查裁定结论通知（与成绩复核通知同一处）。
 
 > 新表 `t_examinee_checkin / t_violation_record / t_absence_mark / t_absence_mark_version / t_score_snapshot / t_absence_stat` 已纳入工作区快照与回退；`t_exam_score` 加列 `valid`（裁定生效回写，成绩导入时若已有生效无效裁定则落库即无效）；schema 版本号 `absence-1`。
+
+## 证书编号与验真工作区（cert-1）
+
+针对"编号手工排出重号、发出去的证收不回、验真根本没有"的问题，把证书编号收口到 evops-base 单一权威来源：**系统按规则发号（年度+批次+流水+末位校验码）→ 发证后信息只读、作废留记录 → 对外凭编号+姓名验真，只回有效性与批次**。编号规则分**模块（主表）/ 版本（只追加）/ 状态（当前版本）**三段，与等级规则、混编算法同一套版本模式。用人单位下周开始小流量接接口，验真按 IP 限流。
+
+### 34. 编号规则模块（模块 + 版本 + 状态）
+
+- `POST /api/cert-number-rules`、`GET /api/cert-number-rules?projectCode=`、`GET /api/cert-number-rules/{ruleId}`：编号规则按项目建档（一个项目一套，重复建档报 `DUPLICATE_RULE_PROJECT`，调口径走新版本）。
+- `POST /api/cert-number-rules/{ruleId}/versions`：建草稿版本，提交编号参数
+  `{"prefix":"ZS","yearDigits":4,"separator":"-","seqLength":4,"seqStart":1,"checksumAlgo":"MOD36-2"}`
+  - 编号 = `prefix + 年度 + separator + 批次编码 + separator + 流水 + separator + 校验码`；
+  - `yearDigits` 2 或 4；`separator` 仅允许 `-` 或空串（连写）；流水定宽补零、超宽自然扩展不截断；
+  - `checksumAlgo` 为 `MOD36-2`（ISO 7064 MOD 37-2，两位 0-9A-Z 校验符，单字符错 / 相邻换位全检出）或 `NONE`。
+- `GET .../versions`、`GET /api/cert-number-rules/versions/{versionId}`；`POST .../versions/{versionId}/publish`（**DRAFT→ACTIVE**，自动把同规则旧生效版置 DISABLED）、`POST .../disable`。
+- `POST /api/cert-number-rules/versions/{versionId}/trial`：`{"year":"2026","batchCode":"B2601","seq":1}` 试算编号与校验码，不写数据。
+- 发号只认批次所属项目的当前 ACTIVE 版本；每张证永久记下 `ruleVersionNo`——**规则调整只管新证，旧证编号与口径不变**。
+
+### 35. 发证（两步预检；年度+批次+流水+校验码）
+
+- `POST /api/certificates/issue/preview` → `POST /api/certificates/issue`：`{"batchId":1, "regNos":[...]}`；`regNos` 为空给批次内全部未发证名册行发证，指定时按报名号过滤（不属于本批次 / 请求内重复逐条列跳过）。
+- 年度取**发证时刻**的年份；流水按"规则版本 + 年度 + 批次编码"独立计数，按报名号顺序连续发号，行级 UPDATE 原子推进。
+- **流水重起不撞旧号**：换新规则版本即从该版本 `seqStart` 重新计数，但每个编号落库前都扫库内证书与旧号占用表，撞号自动顺延，计数器只增不减，绝不重号（`cert_no` 全局唯一约束兜底）。
+- 已发证名册行幂等跳过；并发冲突整批回滚提示重试；发证结果返回编号清单与跳过明细。
+- **发证后信息只读**：证书没有更新 / 删除接口；姓名随名册，发证时冻结进证书行。
+
+### 36. 作废（只追加留记录，不可撤销）
+
+- `POST /api/certificates/{id}/revoke`：`{"reason":"..."}` 原因必填；主表 ISSUED→REVOKED，同时**追加一条** `t_certificate_revoke`（经办取 `X-Operator`、原因、钟点）；已作废重复作废报 `CERT_ALREADY_REVOKED`。
+- `GET /api/certificates/{id}/revokes`：查作废记录。
+- `GET /api/certificates?batchId=`、`GET /api/certificates/by-cert-no?certNo=`、`GET /api/certificates/{id}`：管理视图。
+
+### 37. 旧编号登记（手工时代发出去、收不回的证）
+
+- `POST /api/cert-legacy-nos/import/preview` → `POST /api/cert-legacy-nos/import`：条目 `{certNo, name?, batchCode?, certYear?, projectCode?, source?, status?}`，`status` 为 `ISSUED`（默认，旧号仍有效）或 `REVOKED`（旧号已作废，只占号）。
+- 文件内重复、库内已登记、与系统新号撞号逐条幂等跳过；空编号、非法状态等结构性问题**整批拒收、不落半条**。
+- 登记后：系统发号主动避让这些号；验真窗口能查到历史证（标明历史登记），作废旧号给作废提示。`GET /api/cert-legacy-nos?projectCode=&status=`。
+
+### 38. 对外验真窗口（编号 + 姓名；只回有效性与批次）
+
+- `GET/POST /api/cert-verify?certNo=&name=`（中文参数做 URL 编码）：仍走 HTTP Basic；返回字段仅
+  `result / message / name(命中时回显) / batchCode / batchName / certYear / issuedAt / revokedAt / revokeReason`，
+  **不含证件号、电话等任何隐私字段**。
+  - `VALID`：编号存在、姓名一致、证书有效；历史登记旧号同样回 VALID 并注明历史证书；
+  - `REVOKED`：编号与姓名一致但已作废，明确提示"该证书已作废，不再有效"，附作废时间与原因；
+  - `NOT_MATCHED`：编号不存在**或姓名不一致统一口径**，防止按编号枚举姓名；
+  - `INVALID_FORMAT`：编号校验码不自洽，连库都不查。
+- 小流量：按来源 IP 滑动窗口限流，默认 **30 次/分钟**（`evops.cert.verify.rate-limit-per-minute` 可调，0/负数为不限流）；取 `X-Forwarded-For`/`X-Real-IP` 识别代理后真实 IP；超限返回 `RATE_LIMITED` 可读提示，下周放量时直接调大配置。
+
+> 新表 `t_cert_number_rule / t_cert_number_rule_version / t_certificate / t_certificate_revoke / t_certificate_seq / t_legacy_cert_no` 已纳入工作区快照与回退；schema 版本号 `cert-1`。
